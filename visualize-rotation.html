@@ -178,6 +178,20 @@
         </div>
         
         <button id="reset-btn2">Reset Top Cylinder</button>
+        
+        <h2 style="margin-top: 20px;">🌐 ESP32 Connection</h2>
+        
+        <div class="control-group">
+            <label>ESP32 IP Address</label>
+            <input type="text" id="esp-ip" placeholder="192.168.1.100" style="width: 100%; padding: 5px;">
+        </div>
+        
+        <div class="control-group">
+            <button id="connect-btn">Connect & Start</button>
+            <button id="stop-btn" disabled>Stop</button>
+            <button id="ack-btn" disabled>Send ACK</button>
+            <span id="status" style="margin-left: 10px;">Disconnected</span>
+        </div>
     </div>
     
     <div id="axes-helper">
@@ -351,6 +365,125 @@
             }
         );
 
+        // WebSocket for ESP32
+        let ws = null;
+        let ackTimeout = null;
+        const espIpInput = document.getElementById('esp-ip');
+        const connectBtn = document.getElementById('connect-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const ackBtn = document.getElementById('ack-btn');
+        const statusSpan = document.getElementById('status');
+
+        function connectWebSocket() {
+            const ip = espIpInput.value.trim();
+            if (!ip) {
+                alert('Please enter ESP32 IP address');
+                return;
+            }
+            const url = `ws://${ip}/ws`;
+            ws = new WebSocket(url);
+            ws.binaryType = "arraybuffer";
+
+            ws.onopen = function() {
+                statusSpan.textContent = 'Connected';
+                statusSpan.style.color = 'green';
+                connectBtn.disabled = true;
+                stopBtn.disabled = false;
+                ackBtn.disabled = false;
+                ws.send('sendAngles');
+            };
+
+            ws.onclose = function() {
+                if (ackTimeout) clearTimeout(ackTimeout);
+                statusSpan.textContent = 'Disconnected';
+                statusSpan.style.color = 'red';
+                connectBtn.disabled = false;
+                stopBtn.disabled = true;
+                ackBtn.disabled = true;
+                ws = null;
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+                statusSpan.textContent = 'Error';
+                statusSpan.style.color = 'red';
+            };
+
+            ws.onmessage = function(event) {
+                console.log("goit avbles")
+                if (event.data instanceof ArrayBuffer) {
+                    console.log("inside bytes")
+                    // Clear previous timeout
+                    if (ackTimeout) clearTimeout(ackTimeout);
+
+                    const dataView = new DataView(event.data);
+                    const roll1 = dataView.getFloat32(0, true);
+                    const pitch1 = dataView.getFloat32(4, true);
+                    const yaw1 = dataView.getFloat32(8, true);
+                    const roll2 = dataView.getFloat32(12, true);
+                    const pitch2 = dataView.getFloat32(16, true);
+                    const yaw2 = dataView.getFloat32(20, true);
+
+                    // Update first model
+                    if (pivotGroup) {
+                        pivotGroup.rotation.set(
+                            THREE.MathUtils.degToRad(roll1),
+                            THREE.MathUtils.degToRad(pitch1),
+                            THREE.MathUtils.degToRad(yaw1)
+                        );
+                        // Update position of second model
+                        if (pivotGroup2 && joinMarker) {
+                            const worldPos = new THREE.Vector3();
+                            joinMarker.getWorldPosition(worldPos);
+                            pivotGroup2.position.copy(worldPos);
+                        }
+                    }
+
+                    // Update second model
+                    if (pivotGroup2) {
+                        pivotGroup2.rotation.set(
+                            THREE.MathUtils.degToRad(roll2),
+                            THREE.MathUtils.degToRad(pitch2),
+                            THREE.MathUtils.degToRad(yaw2)
+                        );
+                    }
+
+                    // Update slider values for display
+                    xSlider.value = roll1;
+                    ySlider.value = pitch1;
+                    zSlider.value = yaw1;
+                    xValue.textContent = roll1.toFixed(1) + '°';
+                    yValue.textContent = pitch1.toFixed(1) + '°';
+                    zValue.textContent = yaw1.toFixed(1) + '°';
+
+                    xSlider2.value = roll2;
+                    ySlider2.value = pitch2;
+                    zSlider2.value = yaw2;
+                    xValue2.textContent = roll2.toFixed(1) + '°';
+                    yValue2.textContent = pitch2.toFixed(1) + '°';
+                    zValue2.textContent = yaw2.toFixed(1) + '°';
+
+                    // Send ack to continue receiving
+                    if (ws) ws.send('ack');
+
+                    // Set timeout to send ack again in 200ms
+                    ackTimeout = setTimeout(() => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send('ack');
+                        }
+                    }, 200);
+                }
+            };
+        }
+
+        function stopWebSocket() {
+            if (ackTimeout) clearTimeout(ackTimeout);
+            if (ws) {
+                ws.send('stopAngles');
+                ws.close();
+            }
+        }
+
         // Control elements
         const xSlider = document.getElementById('x-slider');
         const ySlider = document.getElementById('y-slider');
@@ -481,6 +614,15 @@
             yValue2.textContent = '0°';
             zValue2.textContent = '0°';
             updateRotation2();
+        });
+
+        // WebSocket event listeners
+        connectBtn.addEventListener('click', connectWebSocket);
+        stopBtn.addEventListener('click', stopWebSocket);
+        ackBtn.addEventListener('click', function() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send('ack');
+            }
         });
 
         // Handle window resize
